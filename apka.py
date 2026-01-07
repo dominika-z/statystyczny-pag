@@ -15,10 +15,10 @@ import pymongo
 
 
 def setdb():
-    with open("powiaty.geojson", "r", encoding="utf-8") as f:
+    with open(r"C:\aszkola\5 sem\pag\projekt2\powiaty.geojson", "r", encoding="utf-8") as f:
         powiaty_raw = json.load(f)["features"] 
 
-    with open("woj.geojson", "r", encoding="utf-8") as f:
+    with open(r"C:\aszkola\5 sem\pag\projekt2\woj.geojson", "r", encoding="utf-8") as f:
         wojewodztwa_raw = json.load(f)["features"] 
 
     #Connect to the Redis database 
@@ -38,22 +38,22 @@ def setdb():
         db.set(objectkey, objectval)
 
 
-def get_geojson_data(db, key_prefix):
-    #pobiera wszystkie obiekty z Redis pasujące do danego prefiksu klucza
+# def get_geojson_data(db, key_prefix):
+#     #pobiera wszystkie obiekty z Redis pasujące do danego prefiksu klucza
 
-    keys = db.keys(f"{key_prefix}:*") 
+#     keys = db.keys(f"{key_prefix}:*") 
     
-    features = []
-    if not keys:
-        print(f"Nie znaleziono kluczy z prefiksem: {key_prefix}")
-        return None
+#     features = []
+#     if not keys:
+#         print(f"Nie znaleziono kluczy z prefiksem: {key_prefix}")
+#         return None
         
-    for key in keys:
-        feature_data = db.get(key)
-        if feature_data:
-            features.append(json.loads(feature_data))
+#     for key in keys:
+#         feature_data = db.get(key)
+#         if feature_data:
+#             features.append(json.loads(feature_data))
             
-    return features
+#     return features
 
 def combine_data(powiaty, wojewodztwa):
     # Konwersja na GeoDataFrame
@@ -62,13 +62,21 @@ def combine_data(powiaty, wojewodztwa):
 
     gdf_wojewodztwa = gdf_wojewodztwa[['name', 'geometry']].rename(columns={'name': 'nazwa_woj'})
     gdf_powiaty = gdf_powiaty[['name', 'geometry']].rename(columns={'name': 'nazwa_powiat'})
+    
+    gdf_powiaty['geom']= gdf_powiaty.geometry.copy()
+    gdf_powiaty['centroid']= gdf_powiaty.geometry.centroid
+    gdf_powiaty= gdf_powiaty.set_geometry('centroid')
 
     powiaty_z_wojewodztwem = gpd.sjoin(
-    left_df=gdf_powiaty,
+    left_df= gdf_powiaty,
     right_df=gdf_wojewodztwa,
     predicate='within',  # Operacja: powiat (left) wewnątrz województwa (right)
     how='left')
+    
+    powiaty_z_wojewodztwem['geometry']= powiaty_z_wojewodztwem['geom']
+    powiaty_z_wojewodztwem = powiaty_z_wojewodztwem.set_geometry('geometry')
 
+   
     powiaty_z_wojewodztwem = powiaty_z_wojewodztwem[['nazwa_powiat', 'nazwa_woj', 'geometry']]
 
     for i, feature in enumerate(powiaty_z_wojewodztwem.iterfeatures()):
