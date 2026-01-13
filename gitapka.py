@@ -1,8 +1,3 @@
-import sys
-import io
-import folium 
-from PyQt5.QtWidgets import QApplication, QWidget, QHBoxLayout, QVBoxLayout
-from PyQt5.QtWebEngineWidgets import QWebEngineView 
 from GUII import *
 import redis 
 import json
@@ -13,13 +8,14 @@ from PyQt5.QtCore import QUrl
 import tempfile
 import pymongo
 from shapely.geometry import shape
+import time
 
 
-def setdb():
-    with open(r"C:\aszkola\5 sem\pag\projekt2\powiaty.geojson", "r", encoding="utf-8") as f:
+def setredis():
+    with open(r"./dane/powiaty.geojson", "r", encoding="utf-8") as f:
         powiaty_raw = json.load(f)["features"] 
 
-    with open(r"C:\aszkola\5 sem\pag\projekt2\woj.geojson", "r", encoding="utf-8") as f:
+    with open(r"./dane/woj.geojson", "r", encoding="utf-8") as f:
         wojewodztwa_raw = json.load(f)["features"] 
 
     #Connect to the Redis database 
@@ -119,10 +115,6 @@ def get_powiatsrednia(db, wojname):
     return wojdata[['nazwa_powiat', 'sredniadzien', 'srednianoc', 'geometry']]
 
 
-
-
-
-
 class MyApp(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -130,29 +122,42 @@ class MyApp(QtWidgets.QMainWindow):
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
         
-        self.ui.comboBox.currentIndexChanged.connect(self.update_map)
+        self.ui.start_slider.sliderReleased.connect(self.update_map)
+        self.ui.end_slider.sliderReleased.connect(self.update_map)
+        self.ui_time = 'noc'
         self.update_map()
 
     def update_map(self):
+        t0 = time.time()
         pool= redis.ConnectionPool(host='127.0.0.1', port=6379, db=0) 
-        redisdb = redis.Redis(connection_pool=pool) 
+        redisdb = redis.Redis(connection_pool=pool)
+        t_connection = time.time()
         woj_name = self.ui.comboBox.currentText()
+        ui_time_range = self.ui.get_time_range()
+        if ui_time_range[0] < ui_time_range[-1]:
+            ui_time = 'dzien'
+        else:
+            ui_time = 'noc'
+        if self.ui_time == ui_time:
+            return
+        self.ui_time = ui_time
     
         gdf_pow = get_powiaty_for_woj(redisdb, woj_name)
+        t_get_powiaty = time.time()
         gdf_woj = get_woj(redisdb, woj_name)
+        t_get_woj = time.time()
         
         srednieop = get_powiatsrednia(redisdb, woj_name) #dodac gdzies w gui takie miejsce na tabelke z wartosciami dla powiatow
-    
-        idmaxdzien = srednieop['sredniadzien'].idxmax()
-        maxdzien = srednieop.loc[idmaxdzien, 'nazwa_powiat']
-        idmaxnoc = srednieop['srednianoc'].idxmax()
-        maxnoc = srednieop.loc[idmaxnoc, 'nazwa_powiat']
-        idmindzien = srednieop['sredniadzien'].idxmin()
-        mindzien = srednieop.loc[idmindzien, 'nazwa_powiat']
-        idminnoc = srednieop['srednianoc'].idxmin()
-        minnoc = srednieop.loc[idminnoc, 'nazwa_powiat']
+        t_get_pow_srednia = time.time()
 
-        print(mindzien, maxdzien)
+        index_name = 'srednia' + ui_time
+
+        index_max = srednieop[index_name].idxmax()
+        max_name = srednieop.loc[index_max, 'nazwa_powiat']
+        index_min = srednieop[index_name].idxmin()
+        min_name = srednieop.loc[index_min, 'nazwa_powiat']
+
+        print(min_name, max_name)
 
         def style_powiaty(feature):
             nazwa = feature['properties']['nazwa_powiat']
@@ -163,13 +168,13 @@ class MyApp(QtWidgets.QMainWindow):
             fill_opacity = 0.1
             
             # Styl dla maksimum (np. czerwony)
-            if nazwa == maxdzien:
+            if nazwa == max_name:
                 color = '#FF0000' # Czerwony
                 fill_opacity = 0.6
                 weight = 3
                 
             # Styl dla minimum (np. niebieski)
-            elif nazwa == mindzien:
+            elif nazwa == min_name:
                 color = '#0000FF' # Niebieski
                 fill_opacity = 0.6
                 weight = 3
@@ -180,7 +185,7 @@ class MyApp(QtWidgets.QMainWindow):
                 'weight': weight,
                 'fillOpacity': fill_opacity
             }
-
+        t_style_function = time.time()
         centroid = gdf_woj.geometry.centroid.iloc[0]
                 
         gdf_woj = gdf_woj.to_crs("EPSG:4326")
@@ -188,8 +193,9 @@ class MyApp(QtWidgets.QMainWindow):
 
         c_gdf = gpd.GeoDataFrame(geometry=[centroid], crs="EPSG:2180").to_crs("EPSG:4326")
         c_lon, c_lat = c_gdf.geometry.iloc[0].x, c_gdf.geometry.iloc[0].y
+        t_reproject = time.time()
 
-        m = folium.Map(location=[c_lat, c_lon], zoom_start=7)
+        m = folium.Map(location=[c_lat, c_lon], zoom_start=8)
 
         folium.GeoJson(
             gdf_woj,
@@ -223,6 +229,14 @@ class MyApp(QtWidgets.QMainWindow):
 
         # Wczytanie mapy w QWebEngineView
         self.ui.webEngineView.load(QUrl.fromLocalFile(tmpfile.name))
+        print("Times:")
+        print(f"  total: {time.time() - t0:.2f} s")
+        print(f"  connection: {t_connection - t0:.2f} s")
+        print(f"  get powiaty: {t_get_powiaty - t_connection:.2f} s")
+        print(f"  get woj: {t_get_woj - t_get_powiaty:.2f} s")
+        print(f"  get pow_srednia: {t_get_pow_srednia - t_get_woj:.2f} s")
+        print(f"  style function: {t_style_function - t_get_pow_srednia:.2f} s")
+        print(f"  reproject: {t_reproject - t_style_function:.2f} s")
 
 def setmongo():
     connection = pymongo.MongoClient("mongodb://localhost")
@@ -230,7 +244,7 @@ def setmongo():
     mongodb.drop_collection("stacje")
     stacje = mongodb.stacje
 
-    with open(r"C:\aszkola\5 sem\pag\projekt2\zipnagita\effacility.geojson", "r", encoding="utf-8") as f:
+    with open(r"./dane/effacility.geojson", "r", encoding="utf-8") as f:
         geojson = json.load(f)
 
     dane =geojson["features"] 
@@ -238,7 +252,7 @@ def setmongo():
 
     mongodb.drop_collection("suma_opadow")
     suma_opadow = mongodb.suma_opadow
-    opad = pd.read_csv(r"C:\aszkola\5 sem\pag\projekt2\zipnagita\B00606S_2023_04.csv", sep=';', decimal=',',  dtype={'ID': str},header=None, usecols=[0,1,2,3], names=['ID', 'Kod', 'DataCzas', 'Wartosc'] )
+    opad = pd.read_csv(r"./dane/B00606S_2023_04.csv", sep=';', decimal=',',  dtype={'ID': str},header=None, usecols=[0,1,2,3], names=['ID', 'Kod', 'DataCzas', 'Wartosc'] )
     opad[['Data','Godzina']] = opad['DataCzas'].str.split(expand=True)
     opad['Pora'] = opad['Godzina'].isin(["19:00","20:00", "21:00", "22:00", "23:00", "00:00","01:00","02:00","03:00","04:00","05:00","06:00"]).map({True: 'noc', False: 'dzien'})
     opad = opad.drop(columns=['DataCzas'])
@@ -371,12 +385,12 @@ if __name__ == "__main__":
     pool= redis.ConnectionPool(host='127.0.0.1', port=6379, db=0) 
     redisdb = redis.Redis(connection_pool=pool) 
     connection = pymongo.MongoClient("mongodb://localhost")
-    # mongodb = connection.bazunia
-    # redisdb.flushdb()
-    
-    # setdb()
+    mongodb = connection.bazunia
 
-    # # print(db.dbsize())
+    # redisdb.flushdb()
+    # setredis()
+    # print(db.dbsize())
+
     # setmongo()
     # stacjezpowiatami(mongodb, redisdb)
 

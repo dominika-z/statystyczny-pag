@@ -9,46 +9,117 @@
 
 
 from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt5 import QtWebEngineWidgets
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QLabel, QSlider
 
 
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         MainWindow.setObjectName("MainWindow")
-        MainWindow.resize(798, 593)
+        MainWindow.resize(1600, 1000)
         self.centralwidget = QtWidgets.QWidget(MainWindow)
         self.centralwidget.setObjectName("centralwidget")
         self.webEngineView = QtWebEngineWidgets.QWebEngineView(self.centralwidget)
-        self.webEngineView.setGeometry(QtCore.QRect(20, 30, 491, 411))
+        self.webEngineView.setGeometry(QtCore.QRect(20, 30, 1000, 940))
         self.webEngineView.setUrl(QtCore.QUrl("about:blank"))
         self.webEngineView.setObjectName("webEngineView")
+
         self.comboBox = QtWidgets.QComboBox(self.centralwidget)
-        self.comboBox.setGeometry(QtCore.QRect(560, 120, 171, 31))
+        self.comboBox.setGeometry(QtCore.QRect(1040, 140, 520, 32))
         self.comboBox.setObjectName("comboBox")
         self.comboBox.addItems(["lubelskie", "podkarpackie", "podlaskie"])
-        self.label = QtWidgets.QLabel(self.centralwidget)
-        self.label.setGeometry(QtCore.QRect(560, 80, 171, 20))
+
+        self.label = QLabel(self.centralwidget)
+        self.label.setGeometry(QtCore.QRect(1040, 80, 420, 40))
         font = QtGui.QFont()
-        font.setPointSize(11)
+        font.setPointSize(13)
         self.label.setFont(font)
         self.label.setObjectName("label")
-        MainWindow.setCentralWidget(self.centralwidget)
-        self.menubar = QtWidgets.QMenuBar(MainWindow)
-        self.menubar.setGeometry(QtCore.QRect(0, 0, 798, 22))
-        self.menubar.setObjectName("menubar")
-        MainWindow.setMenuBar(self.menubar)
-        self.statusbar = QtWidgets.QStatusBar(MainWindow)
-        self.statusbar.setObjectName("statusbar")
-        MainWindow.setStatusBar(self.statusbar)
 
+        self.labelOkresDoby = QLabel(self.centralwidget)
+        self.labelOkresDoby.setGeometry(QtCore.QRect(1040, 200, 420, 40))
+        self.labelOkresDoby.setFont(font)
+        self.labelOkresDoby.setObjectName("labelOkresDoby")
+
+        # Start slider
+        self.start_label = QLabel(self.centralwidget)
+        self.start_label.setGeometry(QtCore.QRect(1040, 260, 50, 30))
+        self.start_slider = QSlider(Qt.Horizontal, self.centralwidget)
+        self.start_slider.setGeometry(QtCore.QRect(1100, 260, 400, 30))
+        self.start_slider.setMinimum(0)
+        self.start_slider.setMaximum(24)
+        self.start_slider.setValue(8)
+        self.start_slider.setTickPosition(QSlider.TicksBelow)
+        self.start_slider.setTickInterval(1)
+        self.start_value_label = QLabel(self.centralwidget)
+        self.start_value_label.setGeometry(QtCore.QRect(1530, 260, 50, 30))
+
+        # End slider
+        self.end_label = QLabel(self.centralwidget)
+        self.end_label.setGeometry(QtCore.QRect(1040, 330, 50, 30))
+        self.end_slider = QSlider(Qt.Horizontal, self.centralwidget)
+        self.end_slider.setGeometry(QtCore.QRect(1100, 330, 400, 30))
+        self.end_slider.setMinimum(0)
+        self.end_slider.setMaximum(24)
+        self.end_slider.setValue(16)
+        self.end_slider.setTickPosition(QSlider.TicksBelow)
+        self.end_slider.setTickInterval(1)
+        self.end_value_label = QLabel(self.centralwidget)
+        self.end_value_label.setGeometry(QtCore.QRect(1530, 330, 50, 30))
+
+        # Range display
+        self.range_label = QLabel(self.centralwidget)
+        self.range_label.setGeometry(QtCore.QRect(1040, 400, 540, 30))
+        self.range_label.setAlignment(Qt.AlignCenter)
+
+        # Connect signals
+        self.start_slider.valueChanged.connect(self.update_start)
+        self.end_slider.valueChanged.connect(self.update_end)
+
+        MainWindow.setCentralWidget(self.centralwidget)
         self.retranslateUi(MainWindow)
         QtCore.QMetaObject.connectSlotsByName(MainWindow)
 
     def retranslateUi(self, MainWindow):
         _translate = QtCore.QCoreApplication.translate
-        MainWindow.setWindowTitle(_translate("MainWindow", "MainWindow"))
+        MainWindow.setWindowTitle(_translate("MainWindow", "PAG 2"))
         self.label.setText(_translate("MainWindow", "Wybierz województwo"))
-from PyQt5 import QtWebEngineWidgets
+        self.labelOkresDoby.setText(_translate("MainWindow", "Wybierz okres dla zestawienia"))
+        self.start_label.setText(_translate("MainWindow", "Start:"))
+        self.start_value_label.setText(_translate("MainWindow", "08:00"))
+        self.end_label.setText(_translate("MainWindow", " End: "))
+        self.end_value_label.setText(_translate("MainWindow", "16:00"))
+        self.range_label.setText(_translate("MainWindow", "Wybrany zakres: 08:00 - 16:00"))
 
+    def update_start(self, value):
+        self.start_value_label.setText(self.format_time(value))
+        self.update_range_display()
+
+    def update_end(self, value):
+        self.end_value_label.setText(self.format_time(value))
+        self.update_range_display()
+
+    def format_time(self, hour):
+        """Convert hour integer to HH:00 format"""
+        return f'{hour:02d}:00'
+
+    def update_range_display(self):
+        start = self.start_slider.value()
+        end = self.end_slider.value()
+        self.range_label.setText(
+            f'Wybrany zakres: {self.format_time(start)} - {self.format_time(end)}'
+        )
+        print(self.get_time_range())
+
+    def get_time_range(self):
+        times = []
+        if self.start_slider.value() <= self.end_slider.value():
+            times = list(range(self.start_slider.value(), self.end_slider.value()+1))
+        else:
+            for i in range(self.start_slider.value(), self.end_slider.value()+25):
+                times += [i % 24]
+        return times
 
 if __name__ == "__main__":
     import sys
