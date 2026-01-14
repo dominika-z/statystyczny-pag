@@ -64,8 +64,6 @@ def combine_data(powiaty, wojewodztwa):
    
     powiaty_z_wojewodztwem = powiaty_z_wojewodztwem[['nazwa_powiat', 'nazwa_woj', 'geometry']]
     return powiaty_z_wojewodztwem
-    
-   
 
 def get_powiaty_for_woj(db, woj_name):
     keys = db.keys("powzwoj:*")
@@ -387,12 +385,12 @@ if __name__ == "__main__":
     connection = pymongo.MongoClient("mongodb://localhost")
     mongodb = connection.bazunia
 
-    # redisdb.flushdb()
-    # setredis()
+    redisdb.flushdb()
+    setredis()
     # print(db.dbsize())
 
-    # setmongo()
-    # stacjezpowiatami(mongodb, redisdb)
+    setmongo()
+    stacjezpowiatami(mongodb, redisdb)
 
     import sys
     app = QtWidgets.QApplication(sys.argv)

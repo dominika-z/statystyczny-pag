@@ -110,7 +110,6 @@ class Ui_MainWindow(object):
         self.range_label.setText(
             f'Wybrany zakres: {self.format_time(start)} - {self.format_time(end)}'
         )
-        print(self.get_time_range())
 
     def get_time_range(self):
         times = []

@@ -1,55 +1,58 @@
+from collections import defaultdict
+
 import redis
 import json
 import pandas as pd
+import geopandas as gpd
 import folium
 import numpy as np
-from datetime import datetime
 import hashlib
 from functools import wraps
 import time
 import pymongo
 from typing import Callable, List, Dict, Any
+from shapely.geometry import Point, shape
+
+HOST = 'localhost'
 
 # Redis client setup
 redis_client = redis.Redis(
-    host = 'localhost',
+    host = HOST,
     port = 6379,
     db = 0,
     decode_responses=True
 )
 
 # MongoDB client setup
-mongo_connection = pymongo.MongoClient("mongodb://localhost")
+mongo_connection = pymongo.MongoClient('mongodb://' + HOST)
 mongo_client = mongo_connection.PAG2
 
 # Cache setup
-CACHE_EXPIRY = {
-    'time': 600,          # 10 minutes
-    'data_type': 3600     # 1 hour
-}
-def generate_cache_key(query_type: str, params: Dict[str, Any]) -> str:
-    key_string = f"{query_type}:" + ":".join(f"{k}={v}" for k, v in sorted(params.items()))
-    hash_param = hashlib.md5(key_string.encode()).hexdigest()[:8]
-    return f"{query_type}:{hash_param}"
-def cache_result(query_type: str) -> Callable:
+def generate_cache_key(args: List, kwargs: Dict[str, Any]) -> str:
+    key_string = ':'.join(args)
+    if kwargs:
+        key_string += ':' + ':'.join(f"{k}={v}" for k, v in sorted(kwargs.items()))
+    return key_string
+def cache_result() -> Callable:
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(*args, **kwargs):
-            cache_key = generate_cache_key(
-                func.__name__,
-                {'args': args, 'kwargs': kwargs})
+            cache_key = generate_cache_key(args, kwargs)
             try:
                 cached_data = redis_client.get(cache_key)
                 if cached_data:
+                    print("Cache hit @ " + cache_key)
                     return json.loads(cached_data), True, cache_key
             except redis.RedisError as e:
                 print(f"Redis error: {e}")
 
             # Cache miss - compute the result
+            print("Cache miss, computing result...")
             result = func(*args, **kwargs)
-            expiry = CACHE_EXPIRY.get(query_type, 600)
+            expiry = 1800                       # 30 minut cache
             try:
                 redis_client.setex(cache_key, expiry, json.dumps(result))
+                print("Cached result @ " + cache_key)
             except redis.RedisError as e:
                 print(f"Redis error: {e}")
 
@@ -70,15 +73,28 @@ def load_collection_to_mongo(csv_path: str):
 
     # To jest bardzo skomplikowana operacja z tym grupowaniem i szczerze sam to mało rozumiem
     # Chodzi o to, że grupuje po ID (kod stacji), a potem po dacie, ale pandas.groupby jest jakieś zagmatwane
+    def process_group(group, effacility_map):
+        group_name = group.name
+        effacility_data = effacility_map.get(group_name, {})
+        geometry = effacility_data.get('geometry', {})
+        coordinates = geometry.get('coordinates', [None, None])
+        powiat, wojewodztwo = find_powiat_and_woj(coordinates)
+
+        records = group.groupby('date', group_keys=False).apply(
+            lambda day_group: day_group[['time', 'value']].to_dict(orient='records'),
+            include_groups=False
+        ).to_dict()
+
+        return {
+            'properties': effacility_data.get('properties', {}),
+            'powiat': powiat,
+            'wojewodztwo': wojewodztwo,
+            'geometry': geometry,
+            'records': records
+        }
     result = (
         df.groupby('ID', group_keys=False)
-        .apply(lambda group: {
-            'properties': effacility_map.get(group.name, None).get('properties', {}) if effacility_map.get(group.name, None) else {},
-            'geometry': effacility_map.get(group.name, None).get('geometry', {}) if effacility_map.get(group.name, None) else {},
-            'records': group.groupby('date', group_keys=False).apply(
-                lambda day_group: day_group[['time', 'value']].to_dict(orient='records')
-            , include_groups=False).to_dict()
-        }, include_groups=False).to_dict()
+        .apply(lambda group: process_group(group, effacility_map), include_groups=False).to_dict()
     )
 
     collection = mongo_client[code]
@@ -87,13 +103,108 @@ def load_collection_to_mongo(csv_path: str):
         document = {
             'ID': id_,
             'properties': data['properties'],
+            'powiat': data['powiat'],
+            'wojewodztwo': data['wojewodztwo'],
             'geometry': data['geometry'],
-            'record': data['records']
+            'records': data['records']
         }
         collection.insert_one(document)
     return collection
+def powiaty_wojewodztwa_to_mongo():
+    with open('../dane/powiaty.geojson', 'r', encoding='utf-8') as f:
+        powiaty = json.load(f)['features']
+    with open('../dane/woj.geojson', 'r', encoding='utf-8') as f:
+        wojewodztwa = json.load(f)['features']
+    # Konwersja na GeoDataFrame
+    gdf_powiaty = gpd.GeoDataFrame.from_features(powiaty).set_crs("EPSG:2180")
+    gdf_wojewodztwa = gpd.GeoDataFrame.from_features(wojewodztwa).set_crs("EPSG:2180")
 
+    gdf_wojewodztwa = gdf_wojewodztwa[['name', 'geometry']].rename(columns={'name': 'nazwa_woj'})
+    gdf_powiaty = gdf_powiaty[['name', 'geometry']].rename(columns={'name': 'nazwa_powiat'})
 
+    gdf_powiaty['geom'] = gdf_powiaty.geometry.copy()
+    gdf_powiaty['centroid'] = gdf_powiaty.geometry.centroid
+    gdf_powiaty = gdf_powiaty.set_geometry('centroid')
+
+    powiaty_z_wojewodztwem = gpd.sjoin(
+        left_df=gdf_powiaty,
+        right_df=gdf_wojewodztwa,
+        predicate='within',  # Operacja: powiat (left) wewnątrz województwa (right)
+        how='left')
+
+    powiaty_z_wojewodztwem['geometry'] = powiaty_z_wojewodztwem['geom']
+    powiaty_z_wojewodztwem = powiaty_z_wojewodztwem.set_geometry('geometry')
+
+    powiaty_z_wojewodztwem = powiaty_z_wojewodztwem[['nazwa_powiat', 'nazwa_woj', 'geometry']]
+
+    collection = mongo_client['powiaty_wojewodztwa']
+    collection.delete_many({})
+    for _, row in powiaty_z_wojewodztwem.iterrows():
+        document = {
+            'nazwa_powiat': row['nazwa_powiat'],
+            'nazwa_woj': row['nazwa_woj'],
+            'geometry': row['geometry'].__geo_interface__
+        }
+        collection.insert_one(document)
+    return powiaty_z_wojewodztwem
+def find_powiat_and_woj(point):
+    try:
+        point = Point(point)
+    except TypeError as e:
+        return None, None
+
+    # Query the MongoDB collection
+    powiaty_wojewodztwa = mongo_client['powiaty_wojewodztwa']
+    documents = list(powiaty_wojewodztwa.find({}))
+
+    for doc in documents:
+        geometry = shape(doc['geometry'])
+        if geometry.contains(point):
+            return doc['nazwa_powiat'], doc['nazwa_woj']
+    return None, None
+
+@cache_result()
+def calculate_statistics(code: str, woj_name: str, /, type: str = 'average') -> Dict[str, Any]:
+    woj_name = woj_name.lower()
+
+    # Get data from Mongo
+    collection = mongo_client[code]
+    documents = list(collection.find({'wojewodztwo': woj_name}))
+
+    powiaty = mongo_client['powiaty_wojewodztwa']
+    powiaty = list(powiaty.find({'nazwa_woj': woj_name}))
+
+    powiaty_with_station = np.unique([doc['powiat'] for doc in documents])
+    d = defaultdict(list)
+    for powiat in powiaty:
+        nazwa = powiat['nazwa_powiat']
+        if nazwa not in powiaty_with_station:
+            print('No station in powiat', nazwa)
+            d[nazwa] = [None] * 24
+            continue
+        stacje_powiatu = [doc for doc in documents if doc['powiat'] == nazwa]
+        stats = [0] * 24
+        div = [0] * 24
+
+        for stacja in stacje_powiatu:
+            for days in stacja['records'].values():
+                for record in days:
+                    idx = int(record['time'][:2])
+                    stats[idx] += record['value']
+                    div[idx] += 1
+        for i, (opad_miesieczny_w_godzine, n) in enumerate(zip(stats, div)):
+            stats[i] = opad_miesieczny_w_godzine / n
+        d[nazwa] = stats
+    d = dict(d)
+    return d
+
+def filter_by_time(time_range: List[int]):
+    pass
 
 if __name__ == "__main__":
-    load_collection_to_mongo('../dane/B00606S_2023_04.csv')
+    # MONGO SETUP:
+    # powiaty_wojewodztwa_to_mongo()
+    # load_collection_to_mongo('../dane/B00606S_2023_04.csv')
+
+    # TESTING:
+    calculate_statistics('B00606S', 'lubelskie')
