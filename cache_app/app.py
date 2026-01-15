@@ -1,17 +1,20 @@
-from collections import defaultdict
-
+import tempfile
 import redis
 import json
 import pandas as pd
 import geopandas as gpd
 import folium
 import numpy as np
-import hashlib
 from functools import wraps
-import time
 import pymongo
 from typing import Callable, List, Dict, Any
-from shapely.geometry import Point, shape
+from collections import defaultdict
+from PyQt5.QtCore import QUrl
+from shapely.geometry import Point, shape, Polygon, MultiPolygon
+from shapely import bounds
+from matplotlib import colormaps, colors
+
+from GUII import *
 
 HOST = 'localhost'
 
@@ -36,7 +39,7 @@ def generate_cache_key(args: List, kwargs: Dict[str, Any]) -> str:
 def cache_result() -> Callable:
     def decorator(func: Callable) -> Callable:
         @wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args, **kwargs) -> (Dict, bool, str):
             cache_key = generate_cache_key(args, kwargs)
             try:
                 cached_data = redis_client.get(cache_key)
@@ -60,7 +63,7 @@ def cache_result() -> Callable:
         return wrapper
     return decorator
 
-# Load collection from CSV to MongoDB
+# Load collection from CSV to MongoDB and support functions
 def load_collection_to_mongo(csv_path: str):
     with open('../dane/effacility.geojson', 'r', encoding='utf-8') as f:
         effacility = json.load(f)['features']
@@ -143,7 +146,8 @@ def powiaty_wojewodztwa_to_mongo():
         document = {
             'nazwa_powiat': row['nazwa_powiat'],
             'nazwa_woj': row['nazwa_woj'],
-            'geometry': row['geometry'].__geo_interface__
+            'geometry': row['geometry'].__geo_interface__,
+            'bbox': bounds(row['geometry']).tolist()        # minx, miny, maxx, maxy
         }
         collection.insert_one(document)
     return powiaty_z_wojewodztwem
@@ -163,8 +167,9 @@ def find_powiat_and_woj(point):
             return doc['nazwa_powiat'], doc['nazwa_woj']
     return None, None
 
+# Main funtion to calculate stats
 @cache_result()
-def calculate_statistics(code: str, woj_name: str, /, type: str = 'average') -> Dict[str, Any]:
+def calculate_statistics(code: str, woj_name: str, /, type: str = 'average') -> Dict:
     woj_name = woj_name.lower()
 
     # Get data from Mongo
@@ -198,13 +203,129 @@ def calculate_statistics(code: str, woj_name: str, /, type: str = 'average') -> 
     d = dict(d)
     return d
 
-def filter_by_time(time_range: List[int]):
-    pass
+def expand_bbox(bbox, bbox2):
+    try:
+        if bbox2[0] < bbox[0]:
+            bbox[0] = bbox2[0]
+        if bbox2[1] < bbox[1]:
+            bbox[1] = bbox2[1]
+        if bbox2[2] > bbox[2]:
+            bbox[2] = bbox2[2]
+        if bbox2[3] > bbox[3]:
+            bbox[3] = bbox2[3]
+    except TypeError:
+        bbox = bbox2
+    return bbox
+
+class MyApp(QtWidgets.QMainWindow):
+    def __init__(self):
+        super().__init__()
+
+        self.ui = Ui_MainWindow()
+        self.ui.setupUi(self)
+
+        self.ui.start_slider.sliderReleased.connect(self.update_map)
+        self.ui.end_slider.sliderReleased.connect(self.update_map)
+        self.ui.comboBox.currentIndexChanged.connect(self.update_map)
+        self.update_map()
+
+    def update_map(self):
+        code = 'B00606S'
+        wojewodztwo_name = self.ui.comboBox.currentText()
+        time_range = self.ui.get_time_range()
+
+        stats, from_chache, redis_key  = calculate_statistics(code, wojewodztwo_name)
+
+        # Filter by time range
+        summed = dict()
+        for nazwa, value in stats.items():
+            stat_sum = None
+            for i, stat in enumerate(value):
+                if stat is None:
+                    continue
+                if i not in time_range:
+                    continue
+                try:
+                    stat_sum += stat
+                except TypeError:
+                    stat_sum = stat
+            summed[nazwa] = stat_sum
+        max_val = max([value for value in summed.values() if value is not None])
+        min_val = min([value for value in summed.values() if value is not None])
+
+        collection = mongo_client['powiaty_wojewodztwa']
+        powiaty_features = list(collection.find({'nazwa_woj': wojewodztwo_name}))
+        bbox = [None, None, None, None]
+        for feature in powiaty_features:
+            feature.pop('_id') # Usunięcie _id
+            feature['geometry'] = shape(feature['geometry'])
+            feature_bbox = feature['geometry'].bounds
+            bbox = expand_bbox(bbox, feature_bbox)
+
+            # dodanie statystyk do powiatu
+            nazwa = feature['nazwa_powiat']
+            feature['stat'] = summed[nazwa]
+
+        powiaty_gdf = gpd.GeoDataFrame(powiaty_features, geometry='geometry', crs='EPSG:2180')
+        powiaty_gdf = powiaty_gdf.to_crs('EPSG:4326')
+        combined_centroid = powiaty_gdf.union_all().centroid
+        c_lon, c_lat = combined_centroid.x, combined_centroid.y
+
+        def style_powiaty(feature):
+            # Domyślny styl
+            color = '#FFA500'  # Pomarańczowy
+            weight = 1
+            fill_opacity = 0.1
+
+            if feature['properties']['stat'] is not None:
+                cmap = colormaps['coolwarm']
+                normalized = (feature['properties']['stat'] - min_val) / max_val
+                color = colors.to_hex(cmap(normalized))
+                fill_opacity = 0.6
+                weight = 3
+
+            return {
+                'fillColor': color,
+                'color': 'black',
+                'weight': weight,
+                'fillOpacity': fill_opacity
+            }
+        m = folium.Map(location=(c_lat, c_lon), zoom_start=8)
+
+        folium.GeoJson(
+            powiaty_gdf,
+            name='Powiaty',
+            style_function=style_powiaty,
+            tooltip=folium.GeoJsonTooltip(fields=['nazwa_powiat', 'stat'], aliases=['Powiat:', 'Średia:'])
+        ).add_to(m)
+
+        tmpfile = tempfile.NamedTemporaryFile(suffix=".html", delete=False)
+        m.save(tmpfile.name)
+        tmpfile.close()
+
+        # Wczytanie mapy w QWebEngineView
+        self.ui.webEngineView.load(QUrl.fromLocalFile(tmpfile.name))
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 if __name__ == "__main__":
     # MONGO SETUP:
     # powiaty_wojewodztwa_to_mongo()
     # load_collection_to_mongo('../dane/B00606S_2023_04.csv')
 
-    # TESTING:
-    calculate_statistics('B00606S', 'lubelskie')
+    import sys
+    app = QtWidgets.QApplication(sys.argv)
+    window = MyApp()
+    window.show()
+    sys.exit(app.exec_())
