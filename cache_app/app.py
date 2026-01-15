@@ -279,7 +279,7 @@ class MyApp(QtWidgets.QMainWindow):
 
             if feature['properties']['stat'] is not None:
                 cmap = colormaps['coolwarm']
-                normalized = (feature['properties']['stat'] - min_val) / max_val
+                normalized = (feature['properties']['stat'] - min_val) / (max_val - min_val)
                 color = colors.to_hex(cmap(normalized))
                 fill_opacity = 0.6
                 weight = 3
