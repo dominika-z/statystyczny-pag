@@ -73,6 +73,19 @@ class Ui_MainWindow(object):
         self.range_label.setGeometry(QtCore.QRect(1040, 400, 540, 30))
         self.range_label.setAlignment(Qt.AlignCenter)
 
+        # Cache info display
+        self.cache_info_label = QLabel(self.centralwidget)
+        self.cache_info_label.setGeometry(QtCore.QRect(1040, 880, 540, 30))
+        self.cache_info_label.setAlignment(Qt.AlignCenter)
+
+        self.cache_hit_label = QLabel(self.centralwidget)
+        self.cache_hit_label.setGeometry(QtCore.QRect(1040, 920, 540, 30))
+        self.cache_hit_label.setAlignment(Qt.AlignCenter)
+
+        self.load_time_label = QLabel(self.centralwidget)
+        self.load_time_label.setGeometry(QtCore.QRect(1040, 960, 540, 30))
+        self.load_time_label.setAlignment(Qt.AlignCenter)
+
         # Connect signals
         self.start_slider.valueChanged.connect(self.update_start)
         self.end_slider.valueChanged.connect(self.update_end)
@@ -91,6 +104,9 @@ class Ui_MainWindow(object):
         self.end_label.setText(_translate("MainWindow", " End: "))
         self.end_value_label.setText(_translate("MainWindow", "16:00"))
         self.range_label.setText(_translate("MainWindow", "Wybrany zakres: 08:00 - 16:00"))
+        self.cache_info_label.setText(_translate("MainWindow", "Ostatnie wczytanie danych: Brak"))
+        self.cache_hit_label.setText(_translate("MainWindow", "Czas pobierania: 0 ms"))
+        self.load_time_label.setText(_translate("MainWindow", "Łączny czas ładowania: 0 ms"))
 
     def update_start(self, value):
         self.start_value_label.setText(self.format_time(value))
