@@ -28,7 +28,7 @@ class Ui_MainWindow(object):
         self.comboBox = QtWidgets.QComboBox(self.centralwidget)
         self.comboBox.setGeometry(QtCore.QRect(1040, 140, 520, 32))
         self.comboBox.setObjectName("comboBox")
-        self.comboBox.addItems(["lubelskie", "podkarpackie", "podlaskie"])
+        self.comboBox.addItems(["dolnośląskie","kujawsko-pomorskie","lubelskie","lubuskie","łódzkie","małopolskie","mazowieckie","opolskie","podkarpackie", "podlaskie", "pomorskie", "śląskie", "świętokrzyskie", "warmińsko-mazurskie", "wielkopolskie", "zachodniopomorskie"])
 
         self.label = QLabel(self.centralwidget)
         self.label.setGeometry(QtCore.QRect(1040, 80, 420, 40))

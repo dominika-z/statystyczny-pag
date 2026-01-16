@@ -30,6 +30,16 @@ redis_client = redis.Redis(
 mongo_connection = pymongo.MongoClient('mongodb://' + HOST)
 mongo_client = mongo_connection.PAG2
 
+mongo_powiaty = list(mongo_client['powiaty_wojewodztwa'].find())
+POWIATY = [
+    (
+        shape(powiat['geometry']),
+        powiat['nazwa_powiat'].lower(),
+        powiat['nazwa_woj'].lower()
+    )
+    for powiat in mongo_powiaty
+]
+
 
 # Cache setup
 def generate_cache_key(args: List, kwargs: Dict[str, Any]) -> str:
@@ -86,8 +96,9 @@ def load_collection_to_mongo(csv_path: str):
         effacility_data = effacility_map.get(group_name, {})
         geometry = effacility_data.get('geometry', {})
         coordinates = geometry.get('coordinates', [None, None])
+        print('znajdywanie')
         powiat, wojewodztwo = find_powiat_and_woj(coordinates)
-
+        print('znaleziono')
         records = group.groupby('date', group_keys=False).apply(
             lambda day_group: day_group[['time', 'value']].to_dict(orient='records'),
             include_groups=False
@@ -167,13 +178,9 @@ def find_powiat_and_woj(point):
     except TypeError as e:
         return None, None
 
-    powiaty_wojewodztwa = mongo_client['powiaty_wojewodztwa']
-    documents = list(powiaty_wojewodztwa.find({}))
-
-    for doc in documents:
-        geometry = shape(doc['geometry'])
-        if geometry.contains(point):
-            return doc['nazwa_powiat'], doc['nazwa_woj']
+    for geom, powiat, woj in POWIATY:
+        if geom.contains(point):
+            return powiat, woj
     return None, None
 
 
@@ -269,7 +276,7 @@ class MyApp(QtWidgets.QMainWindow):
         map_data, from_cache, redis_key = calculate_statistics(code, wojewodztwo_name)
         t1 = perf_counter()
         self.ui.cache_info_label.setText(
-            f'Ostatnie wczytanie danych: {"Z Redis" if from_cache else "Z MongoDB"}'
+            f'Ostatnie wczytanie danych z: {"Redis:"+redis_key if from_cache else "MongoDB"}'
         )
         self.ui.cache_hit_label.setText(f'Czas pobierania: {round((t1-t0)*1000)} ms')
 
@@ -350,7 +357,7 @@ if __name__ == "__main__":
     redis_client.flushall()
     # MONGO SETUP:
     # powiaty_wojewodztwa_to_mongo()
-    # load_collection_to_mongo('../dane/B00606S_2023_04.csv')
+    load_collection_to_mongo('../dane/B00606S_2023_04.csv')
 
     import sys
 
